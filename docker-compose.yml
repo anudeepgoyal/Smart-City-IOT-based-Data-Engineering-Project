@@ -1,0 +1,83 @@
+version: '3'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    restart: always
+    depends_on:
+      - zookeeper
+    ports:
+      - "9093:9092"  # You can still map 9092 to host if you like, but broker won't advertise localhost
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      # SINGLE LISTENER: only advertise "kafka:9092" inside Docker
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  spark-master:
+    image: bitnami/spark:3.4.1
+    container_name: spark-master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    environment:
+      SPARK_MODE: master
+      HADOOP_HOME: "/opt/bitnami/spark"
+      SPARK_LOCAL_DIRS: "/tmp/spark"
+      SPARK_WORKER_DIR: "/tmp/spark/worker"
+    volumes:
+      - .:/app
+
+  spark-worker:
+    image: bitnami/spark:3.4.1
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      HADOOP_HOME: "/opt/bitnami/spark"
+      SPARK_LOCAL_DIRS: "/tmp/spark"
+      SPARK_WORKER_DIR: "/tmp/spark/worker"
+    ports:
+      - "8081:8081"
+    volumes:
+      - .:/app
+
+  spark-app:
+    image: bitnami/spark:3.4.1
+    container_name: spark-app
+    depends_on:
+      - spark-master
+      - kafka
+    ports:
+      - "4040:4040"  # Spark driver UI
+    environment:
+      SPARK_MASTER_URL: spark://spark-master:7077
+      DOCKER_ENV: "1"  # Tells your spark_streaming.py to use kafka:9092
+    volumes:
+      - .:/app
+    command: >
+      spark-submit --master spark://spark-master:7077
+      --conf spark.ui.port=4040
+      --conf spark.ui.host=0.0.0.0
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1
+      /app/spark_streaming.py
+
+networks:
+  default:
+    name: smartcity-network
